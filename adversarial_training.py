@@ -1,30 +1,21 @@
+import sys
+import os
+import ctypes
+import collections
+import re
+import numpy as np
+import scipy.sparse
 
-# load the XGBoost library globally
-_LIB = _load_lib()
-c_bst_ulong = ctypes.c_uint64
+from xgboost import rabit
+from xgboost import callback
+from xgboost.libpath import find_lib_path
+from xgboost.sklearn import XGBModel
+from xgboost.core import *
+from xgboost.compat import (STRING_TYPES, PY3, DataFrame, py_str, PANDAS_INSTALLED, XGBStratifiedKFold,
+                     SKLEARN_INSTALLED, XGBModelBase, XGBClassifierBase, XGBRegressorBase, XGBLabelEncoder)
+from adversarial_booster import AdversarialBooster
 
-def _check_call(ret):
-    """Check the return value of C API call
-    This function will raise exception when error occurs.
-    Wrap every API call with this function
-    Parameters
-    ----------
-    ret : int
-        return value from API calls
-    """
-    if ret != 0:
-        raise XGBoostError(_LIB.XGBGetLastError())
-
-def _load_lib():
-    """Load xgboost Library."""
-    lib_path = find_lib_path()
-    if len(lib_path) == 0:
-        return None
-    lib = ctypes.cdll.LoadLibrary(lib_path[0])
-    lib.XGBGetLastError.restype = ctypes.c_char_p
-    return lib
-
-def train(params, prior, posterior, distribution, num_boost_round=10, evals=(), obj=None, feval=None,
+def train(params, prior, prior_copy, distribution, posterior, num_boost_round=100, evals=(), obj=None, feval=None,
           maximize=False, early_stopping_rounds=None, evals_result=None,
           verbose_eval=True, xgb_model=None, callbacks=None, learning_rates=None):
     callbacks = [] if callbacks is None else callbacks
@@ -48,14 +39,14 @@ def train(params, prior, posterior, distribution, num_boost_round=10, evals=(), 
                       DeprecationWarning)
         callbacks.append(callback.reset_learning_rate(learning_rates))
 
-    return _train_internal(params, prior, posterior, distribution,
+    return _train_internal(params, prior, prior_copy, distribution, posterior,
                            num_boost_round=num_boost_round,
                            evals=evals,
                            obj=obj, feval=feval,
                            xgb_model=xgb_model, callbacks=callbacks)
 
-def _train_internal(params, prior, posterior, distribution,
-                    num_boost_round=10, evals=(),
+def _train_internal(params, prior, prior_copy, distribution, posterior,
+                    num_boost_round=100, evals=(),
                     obj=None, feval=None,
                     xgb_model=None, callbacks=None):
     callbacks = [] if callbacks is None else callbacks
@@ -77,7 +68,7 @@ def _train_internal(params, prior, posterior, distribution,
     if xgb_model is not None:
         if not isinstance(xgb_model, STRING_TYPES):
             xgb_model = xgb_model.save_raw()
-        bst = GANBooster(params, [distribution] + [d[0] for d in evals], model_file=xgb_model)
+        bst = GANBooster(params, [d[0] for d in evals], model_file=xgb_model)
         nboost = len(bst.get_dump())
 
     _params = dict(params) if isinstance(params, list) else params
@@ -110,7 +101,7 @@ def _train_internal(params, prior, posterior, distribution,
                            rank=rank,
                            evaluation_result_list=None))
         if version % 2 == 0:
-            bst.update(dtrain, i, obj)
+            bst.update(prior, prior_copy, distribution, posterior, i, obj)
             bst.save_rabit_checkpoint()
             version += 1
 
